@@ -1505,8 +1505,10 @@ static void setup_scache(void)
 				       way_string[c->scache.ways], c->scache.linesz);
 			}
 #else
+#ifndef CONFIG_MIPS_VIRT
 			if (!(c->scache.flags & MIPS_CACHE_NOT_PRESENT))
 				panic("Dunno how to handle MIPS32 / MIPS64 second level cache");
+#endif
 #endif
 			return;
 		}

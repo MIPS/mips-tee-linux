@@ -482,6 +482,34 @@ config MIPS_MALTA
 	  This enables support for the MIPS Technologies Malta evaluation
 	  board.
 
+config MIPS_VIRT
+	bool "MIPS virtual platform"
+	select HW_HAS_PCI
+	select BOOT_ELF32
+	select BOOT_RAW
+	select CEVT_R4K
+	select CSRC_R4K
+	select COMMON_CLK
+	select IRQ_MIPS_CPU
+	select DMA_NONCOHERENT
+	select MIPS_GIC
+	select MIPS_CPU_SCACHE
+	select LIBFDT
+	select HW_HAS_PCI
+	select SMP_UP if SMP
+	select SWAP_IO_SPACE
+	select SYS_HAS_CPU_MIPS32_R2
+	select SYS_HAS_CPU_MIPS32_R3_5
+	select SYS_HAS_CPU_MIPS64_R6
+	select SYS_HAS_EARLY_PRINTK
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_64BIT_KERNEL
+	select SYS_SUPPORTS_HIGHMEM
+	select SYS_SUPPORTS_LITTLE_ENDIAN
+	select SYS_SUPPORTS_MIPS_CPS
+	select SYS_SUPPORTS_SMARTMIPS
+	select USE_OF
+
 config MIPS_SEAD3
 	bool "MIPS SEAD3 board"
 	select BOOT_ELF32

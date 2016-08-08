@@ -1,0 +1,9 @@
+#
+# Virtual platform.
+#
+platform-$(CONFIG_MIPS_VIRT)	+= mach-virt/
+cflags-$(CONFIG_MIPS_VIRT)	+= -I$(srctree)/arch/mips/include/asm/mach-virt
+
+load-$(CONFIG_MIPS_VIRT)	+= 0xffffffff80100000
+
+all-$(CONFIG_MIPS_VIRT)		:= $(COMPRESSION_FNAME).bin

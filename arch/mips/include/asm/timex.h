@@ -71,7 +71,7 @@ static inline int can_use_mips_counter(unsigned int prid)
 
 static inline cycles_t get_cycles(void)
 {
-	if (can_use_mips_counter(read_c0_prid()))
+	if (IS_ENABLED(CONFIG_MIPS_VIRT) || can_use_mips_counter(read_c0_prid()))
 		return read_c0_count();
 	else
 		return 0;	/* no usable counter */
@@ -86,10 +86,10 @@ static inline cycles_t get_cycles(void)
  */
 static inline unsigned long random_get_entropy(void)
 {
-	unsigned int prid = read_c0_prid();
+	unsigned int prid = IS_ENABLED(CONFIG_MIPS_VIRT) ? 0 : read_c0_prid();
 	unsigned int imp = prid & PRID_IMP_MASK;
 
-	if (can_use_mips_counter(prid))
+	if (IS_ENABLED(CONFIG_MIPS_VIRT) || can_use_mips_counter(prid))
 		return read_c0_count();
 	else if (likely(imp != PRID_IMP_R6000 && imp != PRID_IMP_R6000A))
 		return read_c0_random();
