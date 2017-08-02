@@ -37,6 +37,8 @@
 
 #define TEE_SESS_MANAGER_COMMAND_MSG "tee.sess_manager.command_msg"
 
+#define TEE_NULL_MEMREF (-1)
+
 /**
  * mipstee_from_msg_param() - convert from MIPSTEE_MSG parameters to
  *			    struct tee_param
@@ -168,6 +170,18 @@ int mipstee_to_msg_param(struct mipstee_msg_param *msg_params, size_t num_params
 				mp->u.tmem.buf_ptr = 0;
 				break;
 			}
+			/*
+			 * The generic tee_core api detects invalid shm objects
+			 * and so we can't hit the (!p->u.memref.shm) condition
+			 * above.  Instead use shm_offs and size to detect a
+			 * NULL memref and pass it on to TA.
+			 */
+			if ((p->u.memref.shm_offs == (size_t)TEE_NULL_MEMREF)
+					&& !p->u.memref.size) {
+				mp->u.tmem.buf_ptr = 0;
+				break;
+			}
+
 			rc = tee_shm_get_pa(p->u.memref.shm,
 					    p->u.memref.shm_offs, &pa);
 			if (rc)
