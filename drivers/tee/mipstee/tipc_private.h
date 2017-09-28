@@ -24,5 +24,7 @@ int tipc_connect(struct tipc_dn_chan *dn, const char *srv_name);
 ssize_t tipc_read_iter(struct tipc_dn_chan *dn, struct iov_iter *iter);
 ssize_t tipc_write_iter(struct tipc_dn_chan *dn, struct iov_iter *iter);
 int tipc_release(struct tipc_dn_chan *dn);
+ssize_t tipc_write(struct tipc_dn_chan *dn, void *buf, size_t len);
+ssize_t tipc_call(struct tipc_dn_chan *dn, void *buf, size_t len);
 
 #endif /* TIPC_PRIVATE_H */

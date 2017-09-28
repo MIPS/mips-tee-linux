@@ -108,7 +108,7 @@ struct mipstee_msg_param_tmem {
 	u64 buf_ptr;
 	u64 size;
 	u64 shm_ref;
-};
+} __packed;
 
 /**
  * struct mipstee_msg_param_rmem - registered memory reference parameter
@@ -120,7 +120,7 @@ struct mipstee_msg_param_rmem {
 	u64 offs;
 	u64 size;
 	u64 shm_ref;
-};
+} __packed;
 
 /**
  * struct mipstee_msg_param_value - opaque value parameter
@@ -131,17 +131,19 @@ struct mipstee_msg_param_value {
 	u64 a;
 	u64 b;
 	u64 c;
-};
+} __packed;
 
 /**
- * struct mipstee_msg_param - parameter used together with struct mipstee_msg_arg
+ * struct mipstee_msg_param - parameter used together with struct
+ * mipstee_msg_arg
  * @attr:	attributes
  * @tmem:	parameter by temporary memory reference
  * @rmem:	parameter by registered memory reference
  * @value:	parameter by opaque value
  *
- * @attr & MIPSTEE_MSG_ATTR_TYPE_MASK indicates if tmem, rmem or value is used in
- * the union. MIPSTEE_MSG_ATTR_TYPE_VALUE_* indicates value,
+ * @attr & MIPSTEE_MSG_ATTR_TYPE_MASK indicates if tmem, rmem or value is used
+ * in the union.
+ * MIPSTEE_MSG_ATTR_TYPE_VALUE_* indicates value,
  * MIPSTEE_MSG_ATTR_TYPE_TMEM_* indicates tmem and
  * MIPSTEE_MSG_ATTR_TYPE_RMEM_* indicates rmem.
  * MIPSTEE_MSG_ATTR_TYPE_NONE indicates that none of the members are used.
@@ -153,7 +155,7 @@ struct mipstee_msg_param {
 		struct mipstee_msg_param_rmem rmem;
 		struct mipstee_msg_param_value value;
 	} u;
-};
+} __packed;
 
 /**
  * struct mipstee_msg_arg - call argument
@@ -163,6 +165,7 @@ struct mipstee_msg_param {
  * @session: In parameter for all MIPSTEE_MSG_CMD_* except
  *	     MIPSTEE_MSG_CMD_OPEN_SESSION where it's an output parameter instead
  * @cancel_id: Cancellation id, a unique value to identify this request
+ * @pad: not used
  * @ret: return value
  * @ret_origin: origin of the return value
  * @num_params: number of parameters supplied to the OS Command
@@ -191,7 +194,7 @@ struct mipstee_msg_arg {
 
 	/* num_params tells the actual number of element in params */
 	struct mipstee_msg_param params[0];
-};
+} __packed;
 
 /**
  * MIPSTEE_MSG_GET_ARG_SIZE - return size of struct mipstee_msg_arg
@@ -204,6 +207,32 @@ struct mipstee_msg_arg {
 #define MIPSTEE_MSG_GET_ARG_SIZE(num_params) \
 	(sizeof(struct mipstee_msg_arg) + \
 	 sizeof(struct mipstee_msg_param) * (num_params))
+
+/**
+ * struct mipstee_msg_hdr
+ * @magic    - set to REE_MAGIC
+ * @data_tag - used to match synchronous requests and replies on the REE side
+ */
+struct mipstee_msg_hdr {
+	uint32_t magic;
+	uint32_t data_tag;
+} __packed;
+
+/**
+ * struct mipstee_tipc_msg
+ * @hdr - header for the message
+ * @msg - the bulk of the sender's message
+ */
+struct mipstee_tipc_msg {
+	struct mipstee_msg_hdr hdr;
+	struct mipstee_msg_arg msg;
+} __packed;
+
+#define REE_MAGIC (0x52454520) /* "REE " */
+
+#define MIPSTEE_TIPC_MSG_GET_SIZE(num_params) \
+	(sizeof(struct mipstee_msg_hdr) + \
+	 MIPSTEE_MSG_GET_ARG_SIZE(num_params))
 
 /*****************************************************************************
  * Part 2 - requests from normal world

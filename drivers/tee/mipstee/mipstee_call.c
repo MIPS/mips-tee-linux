@@ -50,36 +50,23 @@ u32 mipstee_do_call_with_arg(struct tee_context *ctx,
 {
 	struct mipstee_context_data *ctxdata = ctx->data;
 	struct tipc_dn_chan *channel = ctxdata->cmd_ch;
-	struct kvec iov;
-	struct iov_iter iter;
+	size_t msg_len;
 	int rc;
 
 	pr_devel("%s ctx %p sess %u\n", __func__, ctx, msg_arg->session);
 
-	iov.iov_base = msg_arg;
-	iov.iov_len = MIPSTEE_MSG_GET_ARG_SIZE(msg_arg->num_params);
+	msg_len = MIPSTEE_MSG_GET_ARG_SIZE(msg_arg->num_params);
 
-	// read from iov iter and write to tipc chan
-	iov_iter_kvec(&iter, READ | ITER_KVEC, &iov, 1, iov.iov_len);
-	rc = tipc_write_iter(channel, &iter);
+	if (msg_arg->cmd == MIPSTEE_MSG_CMD_CANCEL)
+		rc = tipc_write(channel, msg_arg, msg_len);
+	else
+		rc = tipc_call(channel, msg_arg, msg_len);
+
 	if (rc < 0) {
-		pr_err("%s tipc_write_iter cmd %u sess %u err %d\n", __func__,
+		pr_err("%s failed cmd %u sess %u err %d\n", __func__,
 				msg_arg->cmd, msg_arg->session, rc);
 		return rc;
 	}
-
-	if (msg_arg->cmd != MIPSTEE_MSG_CMD_CANCEL) {
-		// read from tipc chan and write to iov iter
-		iov_iter_kvec(&iter, WRITE | ITER_KVEC, &iov, 1, iov.iov_len);
-		rc = tipc_read_iter(channel, &iter);
-		if (rc < 0) {
-			pr_err("%s tipc_read_iter cmd %u sess %u err %d\n",
-					__func__, msg_arg->cmd,
-					msg_arg->session, rc);
-			return rc;
-		}
-	}
-
 	return 0;
 }
 

@@ -46,6 +46,8 @@
 
 #define TIPC_MIN_LOCAL_ADDR		1024
 
+#define MIPSTEE_TIPC_HDR_INIT		{ .magic = REE_MAGIC, .data_tag = 0 }
+
 struct tipc_virtio_dev;
 
 struct tipc_dev_config {
@@ -144,6 +146,13 @@ struct tipc_chan {
 	u32 max_msg_size;
 	u32 max_msg_cnt;
 	char srv_name[MAX_SRV_NAME_LEN];
+};
+
+struct tag_data {
+	struct iov_iter *iter;
+	int tag;
+	int r_ready;
+	int r_err;
 };
 
 static struct class *tipc_class;
@@ -695,7 +704,8 @@ EXPORT_SYMBOL(tipc_chan_destroy);
 
 struct tipc_dn_chan {
 	int state;
-	struct mutex lock; /* protects rx_msg_queue list and channel state */
+	struct mutex lock; /* protects rx_msg_queue, idr and channel state */
+	struct idr msg_idr;
 	struct tipc_chan *chan;
 	wait_queue_head_t readq;
 	struct completion reply_comp;
@@ -871,6 +881,7 @@ int tipc_open(void *trusty_dev, struct tipc_dn_chan **dn_chan)
 	}
 
 	mutex_init(&dn->lock);
+	idr_init(&dn->msg_idr);
 	init_waitqueue_head(&dn->readq);
 	init_completion(&dn->reply_comp);
 	INIT_LIST_HEAD(&dn->rx_msg_queue);
@@ -932,7 +943,7 @@ ssize_t tipc_read_iter(struct tipc_dn_chan *dn, struct iov_iter *iter)
 	size_t len;
 	struct tipc_msg_buf *mb;
 
-	pr_devel("%s\n", __func__);
+	pr_devel("%s(%x)\n", __func__, task_pid_nr(current));
 	mutex_lock(&dn->lock);
 
 	while (list_empty(&dn->rx_msg_queue)) {
@@ -976,7 +987,7 @@ ssize_t tipc_read_iter(struct tipc_dn_chan *dn, struct iov_iter *iter)
 	list_del(&mb->node);
 	tipc_chan_put_rxbuf(dn->chan, mb);
 
-	pr_devel("%s done\n", __func__);
+	pr_devel("%s(%x) done\n", __func__, task_pid_nr(current));
 out:
 	mutex_unlock(&dn->lock);
 	return ret;
@@ -989,7 +1000,7 @@ ssize_t tipc_write_iter(struct tipc_dn_chan *dn, struct iov_iter *iter)
 	long timeout = TXBUF_TIMEOUT;
 	struct tipc_msg_buf *txbuf = NULL;
 
-	pr_devel("%s\n", __func__);
+	pr_devel("%s(%x)\n", __func__, task_pid_nr(current));
 
 	/* this call may block */
 	txbuf = tipc_chan_get_txbuf_timeout(dn->chan, timeout);
@@ -1017,12 +1028,301 @@ ssize_t tipc_write_iter(struct tipc_dn_chan *dn, struct iov_iter *iter)
 	if (ret)
 		goto err_out;
 
-	pr_devel("%s done\n", __func__);
+	pr_devel("%s(%x) done\n", __func__, task_pid_nr(current));
 	return len;
 
 err_out:
 	tipc_chan_put_txbuf(dn->chan, txbuf);
 	return ret;
+}
+
+ssize_t tipc_read(struct tipc_dn_chan *dn, void *buf, size_t buf_sz)
+{
+	struct kvec iov[2];
+	struct iov_iter iter;
+	struct mipstee_msg_hdr hdr = MIPSTEE_TIPC_HDR_INIT;
+
+	iov[0].iov_base = &hdr;
+	iov[0].iov_len = sizeof(hdr);
+	iov[1].iov_base = buf;
+	iov[1].iov_len = buf_sz;
+
+	// set up read from tipc chan writing to iov iter
+	iov_iter_kvec(&iter, WRITE | ITER_KVEC, iov, 2,
+			iov[0].iov_len + iov[1].iov_len);
+	return tipc_read_iter(dn, &iter);
+}
+
+ssize_t tipc_write(struct tipc_dn_chan *dn, void *buf, size_t buf_sz)
+{
+	struct kvec iov[2];
+	struct iov_iter iter;
+	struct mipstee_msg_hdr hdr = MIPSTEE_TIPC_HDR_INIT;
+
+	iov[0].iov_base = &hdr;
+	iov[0].iov_len = sizeof(hdr);
+	iov[1].iov_base = buf;
+	iov[1].iov_len = buf_sz;
+
+	// set up write to tipc chan reading from iov iter
+	iov_iter_kvec(&iter, READ | ITER_KVEC, iov, 2,
+			iov[0].iov_len + iov[1].iov_len);
+	return tipc_write_iter(dn, &iter);
+}
+
+static int tipc_alloc_tag(struct tipc_dn_chan *dn, struct tag_data *tag_data)
+{
+	int rc;
+
+	mutex_lock(&dn->lock);
+	rc = idr_alloc_cyclic(&dn->msg_idr, tag_data, 1, 0, GFP_KERNEL);
+	mutex_unlock(&dn->lock);
+
+	return rc;
+}
+
+static inline void tipc_remove_tag_locked(struct tipc_dn_chan *dn,
+		struct tag_data *tag_data)
+{
+	idr_remove(&dn->msg_idr, tag_data->tag);
+	tag_data->iter = NULL;
+	tag_data->tag = 0;
+	tag_data->r_ready = 0;
+	tag_data->r_err = 0;
+}
+
+static void tipc_remove_tag(struct tipc_dn_chan *dn, struct tag_data *tag_data)
+{
+	mutex_lock(&dn->lock);
+	tipc_remove_tag_locked(dn, tag_data);
+	mutex_unlock(&dn->lock);
+}
+
+static ssize_t read_iter_locked(struct tipc_dn_chan *dn, struct iov_iter *iter)
+{
+	ssize_t ret = 0;
+	size_t len;
+	struct tipc_msg_buf *mb;
+
+	mb = list_first_entry(&dn->rx_msg_queue, struct tipc_msg_buf, node);
+
+	len = mb_avail_data(mb);
+	if (len > iov_iter_count(iter)) {
+		pr_devel("len %zu > iov_iter %zu\n", len, iov_iter_count(iter));
+		ret = -EMSGSIZE;
+		goto out;
+	}
+
+	if (copy_to_iter(mb_get_data(mb, len), len, iter) != len) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+out:
+	list_del(&mb->node);
+	tipc_chan_put_rxbuf(dn->chan, mb);
+	if (ret < 0)
+		return ret;
+	return len;
+}
+
+static int peek_at_tag_in_rx_msg_queue(struct tipc_dn_chan *dn)
+{
+	struct tipc_msg_buf *mb;
+	struct mipstee_tipc_msg *ree_buf;
+
+	mb = list_first_entry_or_null(&dn->rx_msg_queue, struct tipc_msg_buf, node);
+	if (!mb)
+		return 0;
+
+	if (mb_avail_data(mb) < sizeof(struct mipstee_msg_hdr))
+		return 0;
+
+	ree_buf = mb_peek_data(mb, sizeof(struct mipstee_msg_hdr));
+	if (ree_buf->hdr.magic != REE_MAGIC)
+		return 0;
+
+	return ree_buf->hdr.data_tag;
+}
+
+static bool got_rx_data(struct tipc_dn_chan *dn,
+		struct tag_data *tag_data)
+{
+	if (!list_empty(&dn->rx_msg_queue))
+		return true;
+
+	if (tag_data->r_ready)
+		return true;
+
+	return false;
+}
+
+static inline bool _wait_rx(struct tipc_dn_chan *dn,
+		struct tag_data *tag_data)
+{
+	if (dn->state != TIPC_CONNECTED)
+		return true;
+
+	if (got_rx_data(dn, tag_data))
+		return true;
+
+	return false;
+}
+
+static void read_tagged_locked(struct tipc_dn_chan *dn, struct tag_data *tag_data)
+{
+	struct tipc_msg_buf *mb;
+	struct tag_data *rx_tag_data;
+	int tag;
+	ssize_t len;
+
+	if (list_empty(&dn->rx_msg_queue))
+		return;
+
+	tag = peek_at_tag_in_rx_msg_queue(dn);
+
+	rx_tag_data = idr_find(&dn->msg_idr, tag);
+	if (!rx_tag_data) {
+		// caller thread is gone, discard message
+		mb = list_first_entry(&dn->rx_msg_queue, struct tipc_msg_buf,
+				node);
+		list_del(&mb->node);
+		tipc_chan_put_rxbuf(dn->chan, mb);
+		pr_info("%s(%x) read message dropped tag %i\n", __func__,
+				task_pid_nr(current), tag);
+	} else {
+		// read reply for self or on behalf of another thread
+		len = read_iter_locked(dn, rx_tag_data->iter);
+		if (len < 0)
+			rx_tag_data->r_err = len;
+		rx_tag_data->r_ready = 1;
+		pr_devel("%s(%x) read message (%s) tag %i\n", __func__,
+				task_pid_nr(current), (rx_tag_data == tag_data)
+				? "for self" : "for other", tag);
+		// wake_up is required in order not to miss r_ready event
+		if (rx_tag_data != tag_data)
+			wake_up_interruptible(&dn->readq);
+	}
+}
+
+static ssize_t tipc_read_tagged(struct tipc_dn_chan *dn, struct tag_data *tag_data)
+{
+	int ret = 0;
+	ssize_t len = 0;
+
+	pr_devel("%s(%x)\n", __func__, task_pid_nr(current));
+
+	mutex_lock(&dn->lock);
+
+loop:
+	while (!got_rx_data(dn, tag_data)) {
+		if (dn->state != TIPC_CONNECTED) {
+			if (dn->state == TIPC_CONNECTING)
+				ret = -ENOTCONN;
+			else if (dn->state == TIPC_DISCONNECTED)
+				ret = -ENOTCONN;
+			else if (dn->state == TIPC_STALE)
+				ret = -ESHUTDOWN;
+			else
+				ret = -EBADFD;
+			goto out;
+		}
+
+		mutex_unlock(&dn->lock);
+
+		pr_devel("%s(%x) wait for event\n", __func__,
+				task_pid_nr(current));
+		if (wait_event_interruptible(dn->readq,
+				_wait_rx(dn, tag_data))) {
+			tipc_remove_tag(dn, tag_data);
+			return -ERESTARTSYS;
+		}
+
+		mutex_lock(&dn->lock);
+	}
+
+	if (tag_data->r_ready) {
+		// check if reply is ready for this thread
+		if (tag_data->r_err)
+			ret = tag_data->r_err;
+		else
+			len = iov_iter_count(tag_data->iter);
+		goto out;
+	}
+
+	read_tagged_locked(dn, tag_data);
+	goto loop;
+
+out:
+	tipc_remove_tag_locked(dn, tag_data);
+	mutex_unlock(&dn->lock);
+	pr_devel("%s(%x) done\n", __func__, task_pid_nr(current));
+
+	if (ret < 0)
+		return ret;
+	return len;
+}
+
+ssize_t tipc_call(struct tipc_dn_chan *dn, void *buf, size_t buf_sz)
+{
+	struct kvec iov_r[2];
+	struct kvec iov_w[2];
+	struct iov_iter iter_r;
+	struct iov_iter iter_w;
+	struct tag_data tag_data = { 0 };
+	struct mipstee_msg_hdr hdr = MIPSTEE_TIPC_HDR_INIT;
+	size_t len = 0;
+	int rc;
+
+	// writing to tipc channel will read from iter_r and
+	// reading from tipc channel will write to iter_w
+	iov_r[0].iov_base = &hdr;
+	iov_r[0].iov_len = sizeof(hdr);
+	iov_r[1].iov_base = buf;
+	iov_r[1].iov_len = buf_sz;
+	iov_iter_kvec(&iter_r, READ | ITER_KVEC, iov_r, 2,
+			iov_r[0].iov_len + iov_r[1].iov_len);
+
+	iov_w[0].iov_base = &hdr;
+	iov_w[0].iov_len = sizeof(hdr);
+	iov_w[1].iov_base = buf;
+	iov_w[1].iov_len = buf_sz;
+	iov_iter_kvec(&iter_w, WRITE | ITER_KVEC, iov_w, 2,
+			iov_w[0].iov_len + iov_w[1].iov_len);
+
+	rc = tipc_alloc_tag(dn, &tag_data);
+	if (rc < 0) {
+		pr_err("%s failed (%d) to get tag\n", __func__, rc);
+		goto exit_no_cleanup;
+	}
+
+	// set up tag so reading from tipc channel will write to iter_w
+	tag_data.iter = &iter_w;
+	tag_data.tag = rc;
+	hdr.data_tag = tag_data.tag;
+
+	pr_devel("%s(%x) allocated message tag %i\n", __func__,
+			task_pid_nr(current), tag_data.tag);
+
+	len = tipc_write_iter(dn, &iter_r);
+	if (len < 0) {
+		rc = len;
+		goto exit_cleanup;
+	}
+
+	// tipc_read_tagged will write to the iter it gets from tag_data
+	len = tipc_read_tagged(dn, &tag_data);
+	if (len < 0)
+		rc = len;
+
+	goto exit_no_cleanup;
+
+exit_cleanup:
+	tipc_remove_tag(dn, &tag_data);
+exit_no_cleanup:
+	if (rc < 0)
+		return rc;
+	return len;
 }
 
 int tipc_release(struct tipc_dn_chan *dn)
@@ -1039,6 +1339,8 @@ int tipc_release(struct tipc_dn_chan *dn)
 
 	/* and destroy it */
 	tipc_chan_destroy(dn->chan);
+
+	idr_destroy(&dn->msg_idr);
 
 	kfree(dn);
 

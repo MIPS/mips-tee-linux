@@ -84,5 +84,12 @@ static inline void *mb_get_data(struct tipc_msg_buf *mb, size_t len)
 	return pos;
 }
 
+static inline void *mb_peek_data(struct tipc_msg_buf *mb, size_t len)
+{
+	void *pos = (u8 *)mb->buf_va + mb->rpos;
+	BUG_ON(mb->rpos + len > mb->wpos);
+	return pos;
+}
+
 #endif /* __LINUX_TRUSTY_TRUSTY_IPC_H */
 
