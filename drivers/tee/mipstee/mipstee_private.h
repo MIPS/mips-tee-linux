@@ -31,6 +31,14 @@
 
 #define TEEC_ORIGIN_COMMS		0x00000002
 
+/* Global Platform TEEC_LOGIN_TYPES */
+#define TEEC_LOGIN_PUBLIC               0x00000000
+#define TEEC_LOGIN_USER                 0x00000001
+#define TEEC_LOGIN_GROUP                0x00000002
+#define TEEC_LOGIN_APPLICATION          0x00000004
+#define TEEC_LOGIN_USER_APPLICATION     0x00000005
+#define TEEC_LOGIN_GROUP_APPLICATION    0x00000006
+
 /**
  * struct mipstee - main service struct
  * @dev:		parent virtio tee device

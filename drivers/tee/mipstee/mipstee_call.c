@@ -105,6 +105,60 @@ out:
 	return shm;
 }
 
+static int mipstee_authenticate_client(struct mipstee_msg_arg *msg_arg,
+				   u32 clnt_login)
+{
+	u8 clnt_uuid[TEE_IOCTL_UUID_LEN] = { 0 };
+	// u64 *tmp = &value->c;
+
+	switch(clnt_login) {
+	/* TODO: Implement actual authorization based upon TEEC_LOGIN_TYPE */
+	case TEEC_LOGIN_PUBLIC:
+	/*
+	 * The client is in the Rich Execution Environment and is neither
+	 * identified nor authenticated. The client has no identity and the UUID is
+	 * the Nil UUID.
+	 */
+	case TEEC_LOGIN_USER:
+	/*
+	 * The Client Application has been identified by the Rich Execution
+	 * Environment and the client UUID reflects the actual user that runs the
+	 * calling application independently of the actual application.
+	 */
+	case TEEC_LOGIN_GROUP:
+	/*
+	 * The client UUID reflects a group identity that is executing the calling
+	 * application. The notion of group identity and the corresponding UUID is
+	 * REE-specific.
+	 */
+	case TEEC_LOGIN_APPLICATION:
+	/*
+	 * The Client Application has been identified by the Rich Execution
+	 * Environment independently of the identity of the user executing the
+	 * application. The nature of this identification and the corresponding UUID
+	 * is REE-specific.
+	 */
+	case TEEC_LOGIN_USER_APPLICATION:
+	/*
+	 * The client UUID identifies both the calling application and the user that
+	 * is executing it.
+	 */
+	case TEEC_LOGIN_GROUP_APPLICATION:
+	/*
+	 * The client UUID identifies both the calling application and a group that
+	 * is executing it.
+	 */
+		break;
+	default:
+		return EACCES;
+	}
+
+	memcpy(&msg_arg->params[1].u.value, clnt_uuid, sizeof(clnt_uuid));
+	msg_arg->params[1].u.value.c = clnt_login;
+
+	return 0;
+}
+
 int mipstee_open_session(struct tee_context *ctx,
 		       struct tee_ioctl_open_session_arg *arg,
 		       struct tee_param *param)
@@ -135,8 +189,13 @@ int mipstee_open_session(struct tee_context *ctx,
 	msg_arg->params[1].attr = MIPSTEE_MSG_ATTR_TYPE_VALUE_INPUT |
 				  MIPSTEE_MSG_ATTR_META;
 	memcpy(&msg_arg->params[0].u.value, arg->uuid, sizeof(arg->uuid));
-	memcpy(&msg_arg->params[1].u.value, arg->clnt_uuid, sizeof(arg->clnt_uuid));
-	msg_arg->params[1].u.value.c = arg->clnt_login;
+
+	/* Authenticate client identity */
+	rc = mipstee_authenticate_client(msg_arg, arg->clnt_login);
+	if (rc) {
+		pr_err("\nAuthentication error!!!\n");
+		goto out;
+	}
 
 	rc = mipstee_to_msg_param(msg_arg->params + 2, arg->num_params,
 			param, mipstee->shm_base);
