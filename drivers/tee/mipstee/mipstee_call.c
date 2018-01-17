@@ -177,8 +177,14 @@ static int mipstee_alloc_cancel_idr(struct mipstee_context_data *ctxdata,
 
 	mutex_lock(&ctxdata->mutex);
 
-	idr_id = idr_alloc_cyclic(&ctxdata->cancel_idr,
-			(void *)cancel_id, 1, 0, GFP_KERNEL);
+	/* detect cancel_id collision */
+	idr_id = idr_for_each(&ctxdata->cancel_idr, match_cancel_id,
+			(void *)cancel_id);
+	if (idr_id)
+		idr_id = -EINVAL;
+	else
+		idr_id = idr_alloc_cyclic(&ctxdata->cancel_idr,
+				(void *)cancel_id, 1, 0, GFP_KERNEL);
 
 	mutex_unlock(&ctxdata->mutex);
 out:
