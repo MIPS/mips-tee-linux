@@ -249,6 +249,7 @@ static int mipstee_open(struct tee_context *ctx)
 		return -ENOMEM;
 
 	mutex_init(&ctxdata->mutex);
+	idr_init(&ctxdata->cancel_idr);
 	INIT_LIST_HEAD(&ctxdata->sess_list);
 
 	rc = mipstee_connect(ctx, &ctxdata->cmd_ch,
@@ -301,6 +302,7 @@ static void mipstee_release(struct tee_context *ctx)
 		kfree(sess);
 	}
 
+	idr_destroy(&ctxdata->cancel_idr);
 	tipc_release(ctxdata->cmd_ch);
 	ctxdata->cmd_ch = NULL;
 	kfree(ctxdata);

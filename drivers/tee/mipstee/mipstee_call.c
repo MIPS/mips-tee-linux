@@ -159,6 +159,63 @@ static int mipstee_authenticate_client(struct mipstee_msg_arg *msg_arg,
 	return 0;
 }
 
+static int match_cancel_id(int id, void *p, void *data)
+{
+	if (p == data)
+		return id;
+
+	return 0;
+}
+
+static int mipstee_alloc_cancel_idr(struct mipstee_context_data *ctxdata,
+				    u32 cancel_id)
+{
+	int idr_id = 0;
+
+	if (!cancel_id)
+		goto out;
+
+	mutex_lock(&ctxdata->mutex);
+
+	idr_id = idr_alloc_cyclic(&ctxdata->cancel_idr,
+			(void *)cancel_id, 1, 0, GFP_KERNEL);
+
+	mutex_unlock(&ctxdata->mutex);
+out:
+	pr_devel("%s cancel_id %x idr_id %d\n", __func__, cancel_id, idr_id);
+	return idr_id;
+}
+
+static void mipstee_remove_cancel_idr(struct mipstee_context_data *ctxdata,
+				      int idr_id)
+{
+	pr_devel("%s idr_id %d\n", __func__, idr_id);
+
+	if (!idr_id)
+		return;
+
+	mutex_lock(&ctxdata->mutex);
+	idr_remove(&ctxdata->cancel_idr, idr_id);
+	mutex_unlock(&ctxdata->mutex);
+}
+
+static int mipstee_find_cancel_idr(struct mipstee_context_data *ctxdata,
+				   u32 cancel_id)
+{
+	int idr_id = 0;
+
+	if (!cancel_id)
+		goto out;
+
+	mutex_lock(&ctxdata->mutex);
+	idr_id = idr_for_each(&ctxdata->cancel_idr, match_cancel_id,
+			(void *)cancel_id);
+	mutex_unlock(&ctxdata->mutex);
+out:
+	pr_devel("%s cancel_id %x idr_id %d\n", __func__, cancel_id, idr_id);
+	return idr_id;
+}
+
 int mipstee_open_session(struct tee_context *ctx,
 		       struct tee_ioctl_open_session_arg *arg,
 		       struct tee_param *param)
@@ -169,6 +226,7 @@ int mipstee_open_session(struct tee_context *ctx,
 	struct tee_shm *shm;
 	struct mipstee_msg_arg *msg_arg;
 	struct mipstee_session *sess = NULL;
+	int idr_id = 0;
 
 	pr_devel("%s ctx %p\n", __func__, ctx);
 
@@ -178,7 +236,12 @@ int mipstee_open_session(struct tee_context *ctx,
 		return PTR_ERR(shm);
 
 	msg_arg->cmd = MIPSTEE_MSG_CMD_OPEN_SESSION;
-	msg_arg->cancel_id = arg->cancel_id;
+
+	rc = mipstee_alloc_cancel_idr(ctxdata, arg->cancel_id);
+	if (rc < 0)
+		goto out;
+	idr_id = rc;
+	msg_arg->cancel_id = idr_id;
 
 	/*
 	 * Initialize and add the meta parameters needed when opening a
@@ -236,6 +299,7 @@ int mipstee_open_session(struct tee_context *ctx,
 		arg->ret_origin = msg_arg->ret_origin;
 	}
 out:
+	mipstee_remove_cancel_idr(ctxdata, idr_id);
 	tee_shm_free(shm);
 
 	pr_devel("%s done ctx %p sess %u\n", __func__, ctx, arg->session);
@@ -282,6 +346,7 @@ int mipstee_invoke_func(struct tee_context *ctx, struct tee_ioctl_invoke_arg *ar
 	struct tee_shm *shm;
 	struct mipstee_msg_arg *msg_arg;
 	struct mipstee_session *sess;
+	int idr_id = 0;
 	int rc;
 
 	pr_devel("%s ctx %p sess %u\n", __func__, ctx, arg->session);
@@ -299,7 +364,12 @@ int mipstee_invoke_func(struct tee_context *ctx, struct tee_ioctl_invoke_arg *ar
 	msg_arg->cmd = MIPSTEE_MSG_CMD_INVOKE_COMMAND;
 	msg_arg->func = arg->func;
 	msg_arg->session = arg->session;
-	msg_arg->cancel_id = arg->cancel_id;
+
+	rc = mipstee_alloc_cancel_idr(ctxdata, arg->cancel_id);
+	if (rc < 0)
+		goto out;
+	idr_id = rc;
+	msg_arg->cancel_id = idr_id;
 
 	rc = mipstee_to_msg_param(msg_arg->params, arg->num_params,
 			param, mipstee->shm_base);
@@ -319,6 +389,7 @@ int mipstee_invoke_func(struct tee_context *ctx, struct tee_ioctl_invoke_arg *ar
 	arg->ret = msg_arg->ret;
 	arg->ret_origin = msg_arg->ret_origin;
 out:
+	mipstee_remove_cancel_idr(ctxdata, idr_id);
 	tee_shm_free(shm);
 	pr_devel("%s done ctx %p\n", __func__, ctx);
 	return rc;
@@ -330,8 +401,10 @@ int mipstee_cancel_req(struct tee_context *ctx, u32 cancel_id, u32 session)
 	struct tee_shm *shm;
 	struct mipstee_msg_arg *msg_arg;
 	struct mipstee_session *sess;
+	int idr_id;
 
-	pr_devel("%s ctx %p sess %u\n", __func__, ctx, session);
+	pr_devel("%s ctx %p sess %u cancel_id %x\n", __func__, ctx, session,
+			cancel_id);
 
 	/*
 	 * For open session a session does not yet exist; Check that the
@@ -345,13 +418,17 @@ int mipstee_cancel_req(struct tee_context *ctx, u32 cancel_id, u32 session)
 			return -EINVAL;
 	}
 
+	idr_id = mipstee_find_cancel_idr(ctxdata, cancel_id);
+	if (!idr_id)
+		return -EINVAL;
+
 	shm = get_msg_arg(ctx, 0, &msg_arg, NULL);
 	if (IS_ERR(shm))
 		return PTR_ERR(shm);
 
 	msg_arg->cmd = MIPSTEE_MSG_CMD_CANCEL;
 	msg_arg->session = session;
-	msg_arg->cancel_id = cancel_id;
+	msg_arg->cancel_id = idr_id;
 	mipstee_do_call_with_arg(ctx, msg_arg);
 
 	tee_shm_free(shm);

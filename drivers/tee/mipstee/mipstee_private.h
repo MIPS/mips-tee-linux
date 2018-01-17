@@ -69,6 +69,7 @@ struct mipstee_context_data {
 	struct mutex mutex;
 	struct list_head sess_list;
 	struct tipc_dn_chan *cmd_ch;
+	struct idr cancel_idr;
 };
 
 u32 mipstee_do_call_with_arg(struct tee_context *ctx,
