@@ -1,0 +1,7 @@
+# MIPS-TEE Trusted Execution Environment Configuration
+config MIPSTEE
+	tristate "MIPS-TEE"
+	depends on MIPS
+	help
+	  This implements the MIPS-TEE Trusted Execution Environment (TEE)
+	  driver.

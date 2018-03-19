@@ -54,11 +54,17 @@
  * TEE Implementation ID
  */
 #define TEE_IMPL_ID_OPTEE	1
+#define TEE_IMPL_ID_MIPSTEE	2
 
 /*
  * OP-TEE specific capabilities
  */
 #define TEE_OPTEE_CAP_TZ	(1 << 0)
+
+/*
+ * MIPS-TEE specific capabilities
+ */
+#define TEE_MIPSTEE_CAP_VZ	(1 << 0)
 
 /**
  * struct tee_ioctl_version_data - TEE version
